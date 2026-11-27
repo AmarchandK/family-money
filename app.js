@@ -514,8 +514,9 @@ function deviceName() { const u = navigator.userAgent; const os = /android/i.tes
 async function enablePush() {
   if (isIOS() && !isStandalone()) return openSheet('Enable on iPhone', `<div class="form"><div class="hint">iPhone allows notifications only for apps on the Home Screen:<br><br>1. Tap the <b>Share</b> button (square with ↑) in Safari<br>2. Choose <b>Add to Home Screen</b> → Add<br>3. Open <b>Family Money</b> from the Home Screen icon and log in<br>4. Come back here and tap <b>Enable notifications</b></div></div>`);
   if (!pushSupported()) return toast('This browser does not support notifications. Use Chrome.', 'err');
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') return toast('Notifications blocked — allow them in browser/site settings', 'err');
+  if (/FBAN|FBAV|Instagram|WhatsApp|Line\/|; wv\)/i.test(navigator.userAgent)) return blockedHelp(true);
+  const perm = Notification.permission === 'denied' ? 'denied' : await Notification.requestPermission();
+  if (perm !== 'granted') return blockedHelp(false);
   loading(true);
   try {
     let key = S.settings.vapid_public;
@@ -528,6 +529,15 @@ async function enablePush() {
     if (error) throw error;
     localStorage.setItem('fm-push', '1'); toast('Notifications on ✓'); render();
   } catch (e) { toast(e.message || 'Could not enable notifications', 'err'); } finally { loading(false); }
+}
+function blockedHelp(inApp) {
+  const url = location.href.split('#')[0];
+  const steps = inApp
+    ? `You opened the link inside another app (WhatsApp/Instagram), which can't show notifications.<br><br>Tap <b>⋮</b> (top right) → <b>Open in Chrome</b> (iPhone: open in <b>Safari</b>), log in there and tap Enable again.`
+    : isIOS()
+      ? `1. Open iPhone <b>Settings</b> → <b>Notifications</b><br>2. Find <b>Family Money</b> → turn on <b>Allow Notifications</b><br>3. Come back and tap Enable again.<br><br>If Family Money is not in that list: delete the Home Screen icon, add it again from Safari (Share → Add to Home Screen), open it from the icon and tap Enable.`
+      : `1. Tap the <b>🔒 / ⚙︎ icon</b> left of the address bar<br>2. <b>Permissions</b> (or Site settings) → <b>Notifications</b> → <b>Allow</b><br>3. Reload the page and tap Enable again.<br><br>Still blocked? Phone <b>Settings → Apps → Chrome → Notifications</b> must be ON. If you installed the Home Screen app, also check <b>Settings → Apps → Family Money → Notifications</b>.`;
+  openSheet('Notifications are blocked', `<div class="form"><div class="hint" style="font-size:14px;line-height:1.6">${steps}</div><button class="btn" id="copyUrl">📋 Copy website link</button></div>`, root => { $('#copyUrl', root).onclick = () => { navigator.clipboard?.writeText(url); toast('Link copied ✓'); }; });
 }
 async function disablePush() {
   loading(true);
