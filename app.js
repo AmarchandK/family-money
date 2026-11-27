@@ -314,7 +314,7 @@ function viewHome() {
       { label: 'Saved', data: ag.map(x => x.total), type: 'line', borderColor: '#7c8cff', backgroundColor: '#7c8cff', tension: .35, pointRadius: 3 }] },
       options: { scales: { y: axisMoney, x: { grid: { display: false } } }, plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 10, usePointStyle: true } } } } });
   };
-  return `${monthNav()}
+  return `${notifBanner()}${monthNav()}
   <div class="card hero">
     <div class="l">Total saved in ${monthName(ym, true)}</div>
     <div class="big num">${money(a.total)}</div>
@@ -505,17 +505,54 @@ function viewSettings() {
     <p class="dim" style="font-size:12px;margin:0">Tip: on your phone, open this site in Chrome/Safari and choose <b>Add to Home screen</b> to use it like an app.</p>
   </div></div>`;
 }
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushOn = () => pushSupported() && Notification.permission === 'granted' && localStorage.getItem('fm-push') === '1';
+function b64ToU8(b) { const p = '='.repeat((4 - b.length % 4) % 4); const r = atob((b + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...r].map(c => c.charCodeAt(0))); }
+function deviceName() { const u = navigator.userAgent; const os = /android/i.test(u) ? 'Android' : isIOS() ? 'iPhone' : /mac/i.test(u) ? 'Mac' : /windows/i.test(u) ? 'Windows' : 'Device'; const br = /edg/i.test(u) ? 'Edge' : /chrome|crios/i.test(u) ? 'Chrome' : /firefox/i.test(u) ? 'Firefox' : /safari/i.test(u) ? 'Safari' : ''; return `${os} ${br}`.trim(); }
+async function enablePush() {
+  if (isIOS() && !isStandalone()) return openSheet('Enable on iPhone', `<div class="form"><div class="hint">iPhone allows notifications only for apps on the Home Screen:<br><br>1. Tap the <b>Share</b> button (square with ↑) in Safari<br>2. Choose <b>Add to Home Screen</b> → Add<br>3. Open <b>Family Money</b> from the Home Screen icon and log in<br>4. Come back here and tap <b>Enable notifications</b></div></div>`);
+  if (!pushSupported()) return toast('This browser does not support notifications. Use Chrome.', 'err');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Notifications blocked — allow them in browser/site settings', 'err');
+  loading(true);
+  try {
+    let key = S.settings.vapid_public;
+    if (!key) { const { data, error } = await sb.functions.invoke('send-push', { body: { action: 'config' } }); if (error) throw error; key = data.vapid_public; S.settings.vapid_public = key; }
+    const reg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+    const j = sub.toJSON();
+    const { error } = await sb.from('push_subscriptions').upsert({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, device: deviceName() }, { onConflict: 'endpoint' });
+    if (error) throw error;
+    localStorage.setItem('fm-push', '1'); toast('Notifications on ✓'); render();
+  } catch (e) { toast(e.message || 'Could not enable notifications', 'err'); } finally { loading(false); }
+}
+async function disablePush() {
+  loading(true);
+  try { const reg = await navigator.serviceWorker.getRegistration(); const sub = await reg?.pushManager.getSubscription(); if (sub) { await sb.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); } localStorage.removeItem('fm-push'); toast('Notifications off on this device'); render(); }
+  finally { loading(false); }
+}
+async function testPush() {
+  loading(true);
+  const { data, error } = await sb.functions.invoke('send-push', { body: { title: '✅ Family Money', body: 'Notifications are working!', url: location.href.split('#')[0] } });
+  loading(false);
+  if (error) return toast(error.message, 'err');
+  toast(`Sent to ${data.sent} device${data.sent === 1 ? '' : 's'} ✓`);
+}
+function notifBanner() {
+  if (pushOn() || localStorage.getItem('fm-push-dismiss') === '1') return '';
+  return `<div class="card" style="display:flex;gap:12px;align-items:center;border-color:var(--accent)"><div style="font-size:26px">🔔</div><div style="flex:1"><b>Turn on notifications</b><div class="muted" style="font-size:13px">Get an alert when anyone adds an entry, and a 9 PM reminder.</div></div><div style="display:flex;flex-direction:column;gap:6px"><button class="btn primary sm" id="enablePush">Enable</button><button class="btn ghost sm" id="dismissPush">Later</button></div></div>`;
+}
 function notifCard() {
-  const st = S.settings || {}, topic = st.ntfy_topic;
-  if (!topic) return '';
-  const on = st.notify_on_add !== 'false', rem = st.daily_reminder !== 'false';
+  const st = S.settings || {}, on = st.notify_on_add !== 'false', rem = st.daily_reminder !== 'false', active = pushOn();
   return `<div class="card"><h4>🔔 Notifications</h4><div class="form">
-    <div class="hint"><b>One-time setup on each phone:</b><br>1. Install the free <b>ntfy</b> app (<a style="color:var(--accent)" href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a> · <a style="color:var(--accent)" href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone</a>).<br>2. Tap <b>+</b> → Subscribe to topic → enter the topic below (server: ntfy.sh).</div>
-    <div class="row2" style="align-items:end"><label>Your private topic<input readonly value="${esc(topic)}" id="topicInp"></label><button class="btn" id="copyTopic">📋 Copy</button></div>
-    <label class="check"><input type="checkbox" id="nOnAdd" ${on ? 'checked' : ''}> Notify both phones when an entry is added</label>
+    <div class="hint">This device: <b class="${active ? 'good' : 'warn'}">${active ? 'ON ✓' : 'OFF'}</b>${isIOS() && !isStandalone() ? '<br>On iPhone, first add this site to the Home Screen and open it from there.' : ''}</div>
+    ${active ? '<div class="row2"><button class="btn" id="testNotif">Send test</button><button class="btn" id="disablePush">Turn off here</button></div>' : '<button class="btn primary" id="enablePush">Enable notifications on this device</button>'}
+    <label class="check"><input type="checkbox" id="nOnAdd" ${on ? 'checked' : ''}> Alert all devices when an entry is added</label>
     <label class="check"><input type="checkbox" id="nDaily" ${rem ? 'checked' : ''}> Daily 9 PM reminder with today's summary</label>
-    <button class="btn" id="testNotif">Send test notification</button>
-    <p class="dim" style="font-size:12px;margin:0">Keep the topic private — anyone who knows it can see these alerts.</p>
+    <p class="dim" style="font-size:12px;margin:0">Enable on each phone separately (yours and your wife's).</p>
   </div></div>`;
 }
 async function setSetting(key, value) { const { error } = await sb.from('app_settings').upsert({ key, value }); if (error) return toast(error.message, 'err'); S.settings[key] = value; toast('Saved ✓'); }
@@ -746,7 +783,7 @@ function toCsv(list) {
 
 /* ---------- events ---------- */
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-view],[data-go],[data-mn],[data-amn],[data-tx],[data-wtab],[data-rtab],[data-range],[data-new],[data-quick],[data-upd-val],[data-edit-inv],[data-edit-chit],[data-edit-loan],[data-edit-cat],[data-edit-method],[data-edit-person],[data-close],#fab,#settingsBtn,#refreshBtn,#themeBtn,#pwBtn,#logoutBtn,#backupBtn,#csvAllBtn,#exportCsv,#excelBtn,#exportXlsx,#copyTopic,#testNotif,#allTime,#thisMonth');
+  const el = e.target.closest('[data-view],[data-go],[data-mn],[data-amn],[data-tx],[data-wtab],[data-rtab],[data-range],[data-new],[data-quick],[data-upd-val],[data-edit-inv],[data-edit-chit],[data-edit-loan],[data-edit-cat],[data-edit-method],[data-edit-person],[data-close],#fab,#settingsBtn,#refreshBtn,#themeBtn,#pwBtn,#logoutBtn,#backupBtn,#csvAllBtn,#exportCsv,#excelBtn,#exportXlsx,#enablePush,#disablePush,#dismissPush,#testNotif,#allTime,#thisMonth');
   if (!el) return; const d = el.dataset;
   if (d.close !== undefined) return closeSheet();
   if (el.id === 'fab') return txForm();
@@ -757,8 +794,10 @@ document.addEventListener('click', e => {
   if (el.id === 'logoutBtn') return sb.auth.signOut();
   if (el.id === 'backupBtn') return download(`family-money-backup-${today()}.json`, JSON.stringify(S.d, null, 2), 'application/json');
   if (el.id === 'excelBtn' || el.id === 'exportXlsx') return exportExcel();
-  if (el.id === 'copyTopic') { navigator.clipboard?.writeText(S.settings.ntfy_topic); return toast('Topic copied ✓'); }
-  if (el.id === 'testNotif') return fetch('https://ntfy.sh/', { method: 'POST', body: JSON.stringify({ topic: S.settings.ntfy_topic, title: '✅ Family Money', message: 'Notifications are working!', tags: ['tada'], click: location.href.split('#')[0] }) }).then(r => toast(r.ok ? 'Test sent ✓' : 'Failed', r.ok ? '' : 'err')).catch(() => toast('Failed', 'err'));
+  if (el.id === 'enablePush') return enablePush();
+  if (el.id === 'disablePush') return disablePush();
+  if (el.id === 'dismissPush') { localStorage.setItem('fm-push-dismiss', '1'); return render(); }
+  if (el.id === 'testNotif') return testPush();
   if (el.id === 'csvAllBtn') return download(`family-money-${today()}.csv`, toCsv(S.d.transactions), 'text/csv');
   if (el.id === 'exportCsv') { const tmp = S.view; return download(`family-money-${S.f.month || 'all'}.csv`, toCsv(S.d.transactions.filter(t => !S.f.month || ymOf(t.date) === S.f.month)), 'text/csv'); }
   if (el.id === 'allTime') { S.f.month = ''; return render(); }

@@ -4,7 +4,7 @@ Personal finance tracker for a two-person household: income, expenses (cash / UP
 
 - Frontend: plain HTML/CSS/JS + Chart.js, hosted on GitHub Pages
 - Backend: Supabase (Postgres + Auth + Row Level Security)
-- Notifications: [ntfy.sh](https://ntfy.sh) (free push), triggered from the database; daily 9 PM IST reminder via `pg_cron`
+- Notifications: Web Push (no extra app) via the Supabase Edge Function `send-push`, triggered from the database; daily 9 PM IST reminder via `pg_cron`
 - Export: Excel (.xlsx), CSV, JSON backup
 
 ## Setup
